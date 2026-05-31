@@ -1,348 +1,582 @@
 #include <iostream>
 #include <string>
 #include <ctime>
-#include <cstdlib>
-#include <iomanip>
-
+#include <fstream>
+#include <cctype>
+#include <algorithm>
+#include <limits>
 using namespace std;
 
+// ==================== HELPER SECURITY FUNCTIONS ====================
 
-// Custom Hash Function 
-long long hashPassword(const string& password) {
-    long long hash = 5381;
-    for (int i = 0; i < password.length(); i++) {
-        hash = ((hash << 5) + hash) + (long long)password[i];
+string hashPassword(const string& password) {
+    long long numericHash = 0;
+    for (size_t i = 0; i < password.length(); i++) {
+        int asciiValue = (int)password[i];
+        numericHash += (asciiValue * (i + 1)) + (asciiValue * 10);
     }
-    return hash < 0 ? -hash : hash;
+    string hashStr = to_string(numericHash);
+    int index = 0;
+    while (hashStr.length() < 14) {
+        char passwordChar = password[index % password.length()];
+        int dynamicOffset = ((int)passwordChar + hashStr.length()) % 93 + 33;
+        hashStr += (char)dynamicOffset;
+        index++;
+    }
+    return hashStr.substr(0, 14);
 }
 
-// Password Strength Analyzer (Score out of 10)
-int passwordStrength(const string& pw) {
-    int score = 0;
+string checkStrength(const string& pw) {
     bool upper = false, lower = false, digit = false, special = false;
-
-    for (int i = 0; i < pw.length(); i++) {
-        if (isupper(pw[i])) upper = true;
-        if (islower(pw[i])) lower = true;
-        if (isdigit(pw[i])) digit = true;
-        if (ispunct(pw[i])) special = true;
+    string specialChars = "!@#$%^&*_-+=";
+    for (size_t i = 0; i < pw.length(); i++) {
+        if (isupper(pw[i]))  upper   = true;
+        if (islower(pw[i]))  lower   = true;
+        if (isdigit(pw[i]))  digit   = true;
+        if (specialChars.find(pw[i]) != string::npos) special = true;
     }
-
-    if (pw.length() >= 6)  score += 2;
-    if (pw.length() >= 10) score += 2;
-    if (pw.length() >= 14) score += 1;
-    if (upper)   score += 1;
-    if (lower)   score += 1;
-    if (digit)   score += 1;
-    if (special) score += 2;
-
-    return min(score, 10);
+    if (pw.length() < 8 || !upper || !lower || !digit || !special)
+        return "Weak";
+    return "Strong";
 }
 
-void showStrengthBar(int score) {
-    cout << "Strength [";
-    for (int i = 0; i < 10; i++) cout << (i < score ? "#" : "-");
-    cout << "] " << score << "/10 -> ";
-    if (score <= 3) cout << "Weak\n";
-    else if (score <= 6) cout << "Moderate\n";
-    else if (score <= 8) cout << "Strong\n";
-    else cout << "Very Strong\n";
-}
+string generatePassword(int length = 12) {
+    string upper   = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    string lower   = "abcdefghijklmnopqrstuvwxyz";
+    string digits  = "0123456789";
+    string special = "!@#$%^&*";
+    string allChars = upper + lower + digits + special;
 
-string generatePassword() {
-    const string chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()";
-    string result = "";
-    for (int i = 0; i < 14; i++) {
-        result += chars[rand() % chars.size()];
+    string password = "";
+    password += upper  [rand() % upper.length()];
+    password += lower  [rand() % lower.length()];
+    password += digits [rand() % digits.length()];
+    password += special[rand() % special.length()];
+    for (int i = 4; i < length; i++)
+        password += allChars[rand() % allChars.length()];
+    for (size_t i = password.length() - 1; i > 0; i--) {
+        int j = rand() % (i + 1);
+        swap(password[i], password[j]);
     }
-    return result;
+    return password;
 }
 
-// 2. LINEAR DATA STRUCTURE: SINGLY LINKED LIST 
-// =========================================================================
-struct LogNode {
-    string message;
-    string timestamp;
-    LogNode* next;
-    LogNode(string msg, string ts) : message(msg), timestamp(ts), next(nullptr) {}
+// Safe input: reads full line, trims whitespace, never crashes
+string safeInput(const string& prompt) {
+    string input;
+    while (true) {
+        cout << prompt;
+        if (!getline(cin, input)) {
+            cin.clear();
+            cin.ignore(numeric_limits<streamsize>::max(), '\n');
+            input = "";
+        }
+        // trim leading/trailing spaces
+        size_t start = input.find_first_not_of(" \t\r\n");
+        size_t end   = input.find_last_not_of(" \t\r\n");
+        if (start == string::npos) { cout << "Input cannot be empty. Try again.\n"; continue; }
+        return input.substr(start, end - start + 1);
+    }
+}
+
+// ==================== CORE OOP DATA ENTITIES ====================
+
+class UserProfile {
+private:
+    string username;
+    string passwordHash;
+public:
+    UserProfile(string u, string h)
+        : username(u), passwordHash(h) {}
+
+    string getUsername()     const { return username; }
+    string getPasswordHash() const { return passwordHash; }
 };
 
-class AuditLog {
+class IPTraffic {
 private:
-    LogNode* head;
-    string getSystemTime() {
-        time_t t = time(nullptr);
-        char buf[25];
-        strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", localtime(&t));
-        return string(buf);
+    string ipAddress;
+    time_t blockTime;
+public:
+    IPTraffic(string ip, time_t releaseTime)
+        : ipAddress(ip), blockTime(releaseTime) {}
+    string getIpAddress() const { return ipAddress; }
+    time_t getBlockTime() const { return blockTime; }
+};
+
+// ==================== IP ATTEMPT TRACKER ====================
+// Tracks per-IP failed attempts across all usernames (cross-username brute force)
+
+class IPAttemptTracker {
+private:
+    struct IPAttemptNode {
+        string ip;
+        int    failCount;
+        IPAttemptNode* next;
+        IPAttemptNode(string i) : ip(i), failCount(1), next(nullptr) {}
+    };
+    IPAttemptNode* head;
+public:
+    IPAttemptTracker() : head(nullptr) {}
+
+    int recordFailure(const string& ip) {
+        for (IPAttemptNode* c = head; c; c = c->next)
+            if (c->ip == ip) return ++c->failCount;
+        IPAttemptNode* n = new IPAttemptNode(ip);
+        n->next = head; head = n;
+        return 1;
     }
 
+    int getFailCount(const string& ip) {
+        for (IPAttemptNode* c = head; c; c = c->next)
+            if (c->ip == ip) return c->failCount;
+        return 0;
+    }
+
+    void resetIP(const string& ip) {
+        for (IPAttemptNode* c = head; c; c = c->next)
+            if (c->ip == ip) { c->failCount = 0; return; }
+    }
+};
+
+// ==================== MANAGERS WITH SIMPLIFIED STRUCTS ====================
+
+// AuditLog: singly linked list, O(1) prepend, persisted to logs.txt
+class AuditLog {
+private:
+    struct LogNode {
+        string  message;
+        LogNode* next;
+        LogNode(string msg) : message(msg), next(nullptr) {}
+    };
+    LogNode* head;
 public:
     AuditLog() : head(nullptr) {}
 
-    void addEntry(string msg) {
-        LogNode* newNode = new LogNode(msg, getSystemTime());
-        newNode->next = head; // New logs pushed to top
-        head = newNode;
+    void addEntry(const string& msg) {
+        LogNode* n = new LogNode(msg);
+        n->next = head; head = n;
+        ofstream fout("logs.txt", ios::app);
+        if (fout.is_open()) fout << msg << endl;
     }
 
     void printLog() {
-        if (!head) { cout << "(No logs registered)\n"; return; }
-        LogNode* temp = head;
-        while (temp) {
-            cout << "[" << temp->timestamp << "] " << temp->message << "\n";
-            temp = temp->next;
-        }
+        ifstream fin("logs.txt");
+        if (!fin.is_open()) { cout << "(No logs found)\n"; return; }
+        string line;
+        while (getline(fin, line))
+            cout << "Audit Event -> " << line << "\n";
     }
 };
 
-// 3. NON-LINEAR DATA STRUCTURE: USER AVL DATABASE 
-// =========================================================================
-struct UserNode {
-    string username;
-    long long passwordHash;
-    int height;
-    UserNode *left, *right;
-    UserNode(string u, long long h) : username(u), passwordHash(h), height(1), left(nullptr), right(nullptr) {}
-};
-
+// UserDatabase: AVL tree
 class UserDatabase {
 private:
+    struct UserNode {
+        UserProfile* data;
+        int    height;
+        UserNode* left;
+        UserNode* right;
+        UserNode(UserProfile* d) : data(d), height(1), left(nullptr), right(nullptr) {}
+    };
     UserNode* root;
 
-    int getHeight(UserNode* n) { return n ? n->height : 0; }
-    int getBalance(UserNode* n) { return n ? getHeight(n->left) - getHeight(n->right) : 0; }
+    int  getHeight (UserNode* n) { return n ? n->height : 0; }
+    int  getBalance(UserNode* n) { return n ? getHeight(n->left) - getHeight(n->right) : 0; }
 
     UserNode* rotateRight(UserNode* y) {
-        UserNode* x = y->left;
-        UserNode* T2 = x->right;
-        x->right = y;
-        y->left = T2;
+        UserNode* x = y->left; UserNode* T2 = x->right;
+        x->right = y; y->left = T2;
         y->height = max(getHeight(y->left), getHeight(y->right)) + 1;
         x->height = max(getHeight(x->left), getHeight(x->right)) + 1;
         return x;
     }
-
     UserNode* rotateLeft(UserNode* x) {
-        UserNode* y = x->right;
-        UserNode* T2 = y->left;
-        y->left = x;
-        x->right = T2;
+        UserNode* y = x->right; UserNode* T2 = y->left;
+        y->left = x; x->right = T2;
         x->height = max(getHeight(x->left), getHeight(x->right)) + 1;
         y->height = max(getHeight(y->left), getHeight(y->right)) + 1;
         return y;
     }
 
-    UserNode* insert(UserNode* node, string u, long long h, bool& checkingFlag) {
-        if (!node) { checkingFlag = true; return new UserNode(u, h); }
-        if (u < node->username) node->left = insert(node->left, u, h, checkingFlag);
-        else if (u > node->username) node->right = insert(node->right, u, h, checkingFlag);
-        else { checkingFlag = false; return node; }
+    UserNode* insert(UserNode* node, UserProfile* p, bool& success) {
+        if (!node) { success = true; return new UserNode(p); }
+        if      (p->getUsername() < node->data->getUsername()) node->left  = insert(node->left,  p, success);
+        else if (p->getUsername() > node->data->getUsername()) node->right = insert(node->right, p, success);
+        else   { success = false; return node; }
 
         node->height = 1 + max(getHeight(node->left), getHeight(node->right));
-        int balance = getBalance(node);
-
-        if (balance > 1 && u < node->left->username) return rotateRight(node);
-        if (balance < -1 && u > node->right->username) return rotateLeft(node);
-        if (balance > 1 && u > node->left->username) {
-            node->left = rotateLeft(node->left);
-            return rotateRight(node);
-        }
-        if (balance < -1 && u < node->right->username) {
-            node->right = rotateRight(node->right);
-            return rotateLeft(node);
-        }
+        int bal = getBalance(node);
+        if (bal >  1 && p->getUsername() < node->left->data->getUsername())  return rotateRight(node);
+        if (bal < -1 && p->getUsername() > node->right->data->getUsername()) return rotateLeft(node);
+        if (bal >  1 && p->getUsername() > node->left->data->getUsername())  { node->left  = rotateLeft(node->left);  return rotateRight(node); }
+        if (bal < -1 && p->getUsername() < node->right->data->getUsername()) { node->right = rotateRight(node->right); return rotateLeft(node); }
         return node;
     }
 
-    UserNode* search(UserNode* node, string u) {
-        if (!node || node->username == u) return node;
-        return (u < node->username) ? search(node->left, u) : search(node->right, u);
+    UserNode* search(UserNode* node, const string& u) {
+        if (!node || node->data->getUsername() == u) return node;
+        return (u < node->data->getUsername()) ? search(node->left, u) : search(node->right, u);
     }
 
     void displayAlphabetical(UserNode* node) {
-        if (node) {
-            displayAlphabetical(node->left);
-            cout << left << setw(20) << node->username << "Hash: " << node->passwordHash << "\n";
-            displayAlphabetical(node->right);
-        }
+        if (!node) return;
+        displayAlphabetical(node->left);
+        cout << "User: " << node->data->getUsername()
+             << " | Hash: " << node->data->getPasswordHash() << "\n";
+        displayAlphabetical(node->right);
     }
 
 public:
     UserDatabase() : root(nullptr) {}
 
-    bool createAccount(string u, long long h) {
+    void saveUserToFile(const string& username, const string& hash) {
+        ofstream fout("users.txt", ios::app);
+        if (fout.is_open()) fout << username << " " << hash << "\n";
+    }
+
+    void loadUsersFromFile() {
+        ifstream fin("users.txt");
+        string username, hash;
+        while (fin >> username >> hash) createAccount(username, hash);
+    }
+
+    bool createAccount(const string& u, const string& h) {
         bool status = false;
-        root = insert(root, u, h, status);
+        root = insert(root, new UserProfile(u, h), status);
         return status;
     }
 
-    bool verifyUser(string u, long long h) {
+    UserProfile* getUser(const string& u) {
         UserNode* res = search(root, u);
-        return res && res->passwordHash == h;
+        return res ? res->data : nullptr;
     }
 
-    bool isDuplicate(string u) { return search(root, u) != nullptr; }
-    
+    bool verifyUser(const string& u, const string& enteredHash) {
+        UserProfile* user = getUser(u);
+        return user && user->getPasswordHash() == enteredHash;
+    }
+
+    bool isDuplicate(const string& u) { return search(root, u) != nullptr; }
     void showDb() {
-        if (!root) { cout << "(No credentials stored)\n"; return; }
-        cout << left << setw(20) << "USERNAME" << "PASSWORD HASH VALUE\n";
-        cout << string(50, '-') << "\n";
+        if (!root) { cout << "(No users found)\n"; return; }
         displayAlphabetical(root);
     }
 };
 
-// =========================================================================
-// 4. FIREWALL UTILITY: STRUCT-BASED IP TRACKING
-struct IPData {
-    string ipAddress;
-    int failedAttempts;
-    time_t blockTime;
-};
-
-class Firewall {
+// IPFirewall: AVL tree for blocked IPs
+class IPFirewall {
 private:
-    IPData list[100]; 
-    int count;
+    struct IPNode {
+        IPTraffic* data;
+        int    height;
+        IPNode* left;
+        IPNode* right;
+        IPNode(IPTraffic* d) : data(d), height(1), left(nullptr), right(nullptr) {}
+    };
+    IPNode* root;
 
-public:
-    Firewall() : count(0) {}
+    int  getHeight (IPNode* n) { return n ? n->height : 0; }
+    int  getBalance(IPNode* n) { return n ? getHeight(n->left) - getHeight(n->right) : 0; }
 
-    int findIP(string ip) {
-        for (int i = 0; i < count; i++) {
-            if (list[i].ipAddress == ip) return i;
-        }
-        return -1;
+    IPNode* rotateRight(IPNode* y) {
+        IPNode* x = y->left; IPNode* T2 = x->right;
+        x->right = y; y->left = T2;
+        y->height = max(getHeight(y->left), getHeight(y->right)) + 1;
+        x->height = max(getHeight(x->left), getHeight(x->right)) + 1;
+        return x;
+    }
+    IPNode* rotateLeft(IPNode* x) {
+        IPNode* y = x->right; IPNode* T2 = y->left;
+        y->left = x; x->right = T2;
+        x->height = max(getHeight(x->left), getHeight(x->right)) + 1;
+        y->height = max(getHeight(y->left), getHeight(y->right)) + 1;
+        return y;
     }
 
-    bool checkStatusAndFilter(string ip, AuditLog& logger) {
-        int idx = findIP(ip);
-        if (idx == -1) return false;
+    IPNode* insert(IPNode* node, IPTraffic* t, bool& success) {
+        if (!node) { success = true; return new IPNode(t); }
+        if      (t->getIpAddress() < node->data->getIpAddress()) node->left  = insert(node->left,  t, success);
+        else if (t->getIpAddress() > node->data->getIpAddress()) node->right = insert(node->right, t, success);
+        else   { success = false; return node; }
 
-        time_t now = time(nullptr);
-        if (list[idx].failedAttempts >= 4) {
-            if (difftime(list[idx].blockTime, now) > 0) {
-                cout << "FIREWALL ACTIVE: This IP is blocked for " << (int)difftime(list[idx].blockTime, now) << " more seconds.\n";
-                return true;
-            } else {
-                list[idx].failedAttempts = 0;
-                list[idx].blockTime = 0;
+        node->height = 1 + max(getHeight(node->left), getHeight(node->right));
+        int bal = getBalance(node);
+        if (bal >  1 && t->getIpAddress() < node->left->data->getIpAddress())  return rotateRight(node);
+        if (bal < -1 && t->getIpAddress() > node->right->data->getIpAddress()) return rotateLeft(node);
+        if (bal >  1 && t->getIpAddress() > node->left->data->getIpAddress())  { node->left  = rotateLeft(node->left);  return rotateRight(node); }
+        if (bal < -1 && t->getIpAddress() < node->right->data->getIpAddress()) { node->right = rotateRight(node->right); return rotateLeft(node); }
+        return node;
+    }
+
+    IPNode* search(IPNode* node, const string& ip) {
+        if (!node || node->data->getIpAddress() == ip) return node;
+        return (ip < node->data->getIpAddress()) ? search(node->left, ip) : search(node->right, ip);
+    }
+
+public:
+    IPFirewall() : root(nullptr) {}
+
+    void saveBlockedIP(const string& ip, time_t banTime) {
+        ofstream fout("blacklist.txt", ios::app);
+        if (fout.is_open()) fout << ip << " " << banTime << "\n";
+    }
+
+    void loadBlockedIPs() {
+        ifstream fin("blacklist.txt");
+        string ip; time_t t;
+        while (fin >> ip >> t) {
+            bool s = false;
+            root = insert(root, new IPTraffic(ip, t), s);
+        }
+    }
+
+    bool isBlacklisted(const string& ip) {
+        IPNode* node = search(root, ip);
+        if (!node) return false;
+        if (difftime(node->data->getBlockTime(), time(nullptr)) > 0) {
+            cout << "Access Denied: IP (" << ip << ") is temporarily blocked.\n";
+            return true;
+        }
+        return false;
+    }
+
+    void blockIP(const string& ip, AuditLog& logger) {
+        bool s = false;
+        time_t ban = time(nullptr) + (30 * 60);
+        root = insert(root, new IPTraffic(ip, ban), s);
+        saveBlockedIP(ip, ban);
+        logger.addEntry("WAF Action: Blocked malicious IP -> " + ip);
+        cout << "[SECURITY] IP " << ip << " has been blocked for 30 minutes.\n";
+    }
+};
+
+// ==================== USERNAME BLOCK MANAGER ====================
+// Blocks a username if it receives too many failed attempts from any IP
+
+class UsernameBlockManager {
+private:
+    struct BlockNode {
+        string username;
+        int    failCount;
+        time_t blockUntil;
+        BlockNode* next;
+        BlockNode(string u) : username(u), failCount(1), blockUntil(0), next(nullptr) {}
+    };
+    BlockNode* head;
+    static const int USERNAME_BLOCK_THRESHOLD = 3;
+    static const int USERNAME_BLOCK_MINUTES   = 30;
+
+public:
+    UsernameBlockManager() : head(nullptr) {}
+
+    bool recordFailure(const string& username, AuditLog& logger) {
+        for (BlockNode* c = head; c; c = c->next) {
+            if (c->username == username) {
+                c->failCount++;
+                logger.addEntry("Auth Failure: Attempt #" + to_string(c->failCount)
+                                + " for username -> " + username);
+                if (c->failCount >= USERNAME_BLOCK_THRESHOLD && c->blockUntil == 0) {
+                    c->blockUntil = time(nullptr) + (USERNAME_BLOCK_MINUTES * 60);
+                    logger.addEntry("Security: Username blocked -> " + username);
+                    return true;
+                }
+                return false;
+            }
+        }
+        BlockNode* n = new BlockNode(username);
+        n->next = head; head = n;
+        logger.addEntry("Auth Failure: First failed attempt for username -> " + username);
+        return false;
+    }
+
+    bool isBlocked(const string& username) {
+        for (BlockNode* c = head; c; c = c->next) {
+            if (c->username == username) {
+                if (c->blockUntil != 0 && difftime(c->blockUntil, time(nullptr)) > 0) {
+                    cout << "Security Block: Username [" << username
+                         << "] is temporarily blocked (too many failed attempts).\n";
+                    return true;
+                }
+                return false;
             }
         }
         return false;
     }
 
-    void recordViolation(string ip, AuditLog& logger) {
-        int idx = findIP(ip);
-        if (idx == -1) {
-            list[count] = {ip, 1, 0};
-            idx = count++;
-        } else {
-            list[idx].failedAttempts++;
-        }
-
-        if (list[idx].failedAttempts >= 4) {
-            list[idx].blockTime = time(nullptr) + (30 * 60); // 30-minute block
-            logger.addEntry("FIREWALL: Blocked hostile IP: " + ip);
-            cout << "ALERT: 4 Failed Attempts reached. IP address has been restricted for 30 minutes.\n";
-        } else {
-            cout << "Invalid Credentials. Attempts remaining for this IP: " << (4 - list[idx].failedAttempts) << "\n";
-        }
-    }
-
-    void wipeRecord(string ip) {
-        int idx = findIP(ip);
-        if (idx != -1) {
-            list[idx].failedAttempts = 0;
-            list[idx].blockTime = 0;
-        }
+    void resetUsername(const string& username) {
+        for (BlockNode* c = head; c; c = c->next)
+            if (c->username == username) { c->failCount = 0; c->blockUntil = 0; return; }
     }
 };
 
+// ==================== MAIN ====================
 
-
-// ===================================main======================================
 int main() {
     srand(time(nullptr));
-    UserDatabase appDb;
-    Firewall webWaf;
-    AuditLog systemLog;
 
-    int inputChoice;
-    string u, p, networkIp;
+    UserDatabase  appDb;
+    IPFirewall webWaf;
+    AuditLog systemLog;
+    IPAttemptTracker ipTracker;
+    UsernameBlockManager usernameBlocker;
+
+    appDb.loadUsersFromFile();
+    webWaf.loadBlockedIPs();
+
+    int menuChoice = 0;
 
     do {
-        cout << "\n===============================\n";
-        cout << "   CYBERGUARD AUTH INTERFACE\n";
-        cout << "===============================\n";
-        cout << "1. Create New Account\n2. Secure Login\n3. Generate Strong Pass\n4. Diagnostic Strength Check\n5. Admin: Read DB Hashes\n6. Admin: Read System Logs\n7. Quit System\nChoice: ";
-        cin >> inputChoice;
+        cout << "\n========== SECURE LOGIN AND PROTECTION SYSTEM ==========\n";
+        cout << "1. Register Account\n";
+        cout << "2. Login\n";
+        cout << "3. Check Password Strength\n";
+        cout << "4. View Users\n";
+        cout << "5. View Logs\n";
+        cout << "6. Exit\n";
+        cout << "Choice: ";
 
-        if (inputChoice == 1) {
-            cout << "Enter target Username: "; cin >> u;
-            if (appDb.isDuplicate(u)) { cout << "Registration Failed: Handle already in use.\n"; continue; }
-            cout << "Assign System Password: "; cin >> p;
-            showStrengthBar(passwordStrength(p));
-            if (passwordStrength(p) < 4) { cout << "Account Denied: Password strategy does not pass threshold.\n"; continue; }
-            
-            appDb.createAccount(u, hashPassword(p));
-            systemLog.addEntry("USER MANAGER: Provisioned profile for " + u);
-            cout << "Account configured successfully.\n";
+        string choiceStr;
+        getline(cin, choiceStr);
+        if (choiceStr.empty()) continue;
+        try { menuChoice = stoi(choiceStr); }
+        catch (...) { cout << "Invalid choice. Enter a number 1-7.\n"; continue; }
 
-        } else if (inputChoice == 2) {
-            cout << "Enter Device Target IP: "; cin >> networkIp;
-            if (webWaf.checkStatusAndFilter(networkIp, systemLog)) continue;
+        // ---- OPTION 1: REGISTER ----
+        if (menuChoice == 1) {
+            string userBuffer = safeInput("Enter Username: ");
 
-            char retryChoice = 'y';
-            while (retryChoice == 'y' || retryChoice == 'Y') {
-                cout << "\n--- Secure Login Gateway ---\n";
-                cout << "Username: "; cin >> u;
-                cout << "Password: "; cin >> p;
+            if (appDb.isDuplicate(userBuffer)) {
+                cout << "Error: Username already exists.\n";
+                continue;
+            }
 
-                if (appDb.verifyUser(u, hashPassword(p))) {
-                    cout << "\n[SUCCESS] Access Authorized.\n";
-                    webWaf.wipeRecord(networkIp);
-                    systemLog.addEntry("AUTH GATEWAY: Successful login for " + u);
-                    break;
-                } else {
-                    systemLog.addEntry("AUTH GATEWAY: Failed login attempt for username " + u);
-                    webWaf.recordViolation(networkIp, systemLog);
-                    
-                    if (webWaf.checkStatusAndFilter(networkIp, systemLog)) break;
+            string passBuffer;
+            while (true) {
+                passBuffer = safeInput("Enter Password: ");
+                string result = checkStrength(passBuffer);
+                cout << "Password Strength: " << result << "\n";
 
-                    cout << "\nWould you like to try again? (y/n): "; cin >> retryChoice;
+                if (result == "Weak") {
+                    cout << "\n[!] Weak password. password Requirements:\n";
+                    cout << "    - At least 8 characters\n";
+                    cout << "    - Uppercase letter (A-Z)\n";
+                    cout << "    - Lowercase letter (a-z)\n";
+                    cout << "    - A digit (0-9)\n";
+                    cout << "    - Special character (!@#$%^&*)\n";
+                    systemLog.addEntry("Registration: Weak password rejected for -> " + userBuffer);
+
+                    cout << "Want a suggested strong password? (y/n): ";
+                    string genChoice; getline(cin, genChoice);
+                    if (!genChoice.empty() && (genChoice[0] == 'y' || genChoice[0] == 'Y')) {
+                        string suggested = generatePassword(12);
+                        cout << "Suggested : " << suggested << "\n";
+                        cout << "Strength  : " << checkStrength(suggested) << "\n";
+                        cout << "Use this password? (y/n): ";
+                        string useIt; getline(cin, useIt);
+                        if (!useIt.empty() && (useIt[0] == 'y' || useIt[0] == 'Y')) {
+                            passBuffer = suggested;
+                            break;
+                        }
+                    }
+                    cout << "Please try again.\n";
+                    continue;
+                }
+                break; // password is strong
+            }
+
+            string hash = hashPassword(passBuffer);
+            appDb.createAccount(userBuffer, hash);
+            appDb.saveUserToFile(userBuffer, hash);
+            systemLog.addEntry("Registration: New account created -> " + userBuffer);
+            cout << "Account created successfully!\n";
+        }
+
+        // ---- OPTION 2: LOGIN ----
+        else if (menuChoice == 2) {
+            string ipBuffer = safeInput("Enter your IP Address: ");
+
+            if (webWaf.isBlacklisted(ipBuffer)) {
+                systemLog.addEntry("Login Denied: Blocked IP attempted access -> " + ipBuffer);
+                continue;
+            }
+
+            string userBuffer = safeInput("Enter Username: ");
+
+            if (usernameBlocker.isBlocked(userBuffer)) {
+                systemLog.addEntry("Login Denied: Blocked username -> " + userBuffer);
+                continue;
+            }
+
+            UserProfile* user = appDb.getUser(userBuffer);
+            if (!user) {
+                cout << "Username not found.\n";
+                int ipFails = ipTracker.recordFailure(ipBuffer);
+                systemLog.addEntry("Login Failed: Unknown username [" + userBuffer + "] from IP " + ipBuffer);
+                if (ipFails >= 3) {
+                    webWaf.blockIP(ipBuffer, systemLog);
+                    ipTracker.resetIP(ipBuffer);
+                }
+                continue;
+            }
+
+            string passBuffer = safeInput("Enter Password: ");
+            string enteredHash = hashPassword(passBuffer);
+
+            if (appDb.verifyUser(userBuffer, enteredHash)) {
+                cout << "Login Successful! Welcome, " << userBuffer << ".\n";
+                systemLog.addEntry("Login Success: " + userBuffer + " from IP " + ipBuffer);
+                usernameBlocker.resetUsername(userBuffer);
+                ipTracker.resetIP(ipBuffer);
+            } else {
+                cout << "Wrong password.\n";
+
+                // IP-based tracking
+                int ipFails = ipTracker.recordFailure(ipBuffer);
+                systemLog.addEntry("Login Failed: Wrong password for [" + userBuffer + "] from IP " + ipBuffer);
+
+                if (ipFails >= 3) {
+                    webWaf.blockIP(ipBuffer, systemLog);
+                    ipTracker.resetIP(ipBuffer);
+                }
+
+                // Username-based tracking
+                bool usernameBlocked = usernameBlocker.recordFailure(userBuffer, systemLog);
+                if (usernameBlocked) {
+                    cout << "[SECURITY] Username " << userBuffer << " blocked for 30 minutes.\n";
                 }
             }
-
-        } else if (inputChoice == 3) {
-            p = generatePassword();
-            cout << "\nGenerated secure password: " << p << "\n";
-            showStrengthBar(passwordStrength(p));
-            systemLog.addEntry("SYS UTILS: Random password generated.");
-
-        } else if (inputChoice == 4) {
-            cout << "Provide input password string: "; cin >> p;
-            showStrengthBar(passwordStrength(p));
-
-        } else if (inputChoice == 5) {
-            cout << "Admin Key: "; cin >> p;
-            if (p == "admin123") {
-                appDb.showDb();
-                systemLog.addEntry("SYS AUDIT: DB Hash Tables dumped by root.");
-            } else {
-                cout << "Access Blocked.\n";
-                systemLog.addEntry("ALARM: Unauthorized admin verification failure.");
-            }
-
-        } else if (inputChoice == 6) {
-            cout << "Admin Key: "; cin >> p;
-            if (p == "admin123") systemLog.printLog();
-            else {
-                cout << "Access Blocked.\n";
-                systemLog.addEntry("ALARM: Unauthorized attempt to view logger logs.");
-            }
         }
-    } while (inputChoice != 7);
+
+        // ---- OPTION 3: CHECK STRENGTH ----
+        else if (menuChoice == 3) {
+            string pw = safeInput("Enter password to check: ");
+            cout << "Strength: " << checkStrength(pw) << "\n";
+        }
+
+
+        // ---- OPTION 4: VIEW USERS ----
+        else if (menuChoice == 4) {
+            string key = safeInput("Enter admin key: ");
+            if (key == "admin123") appDb.showDb();
+            else cout << "Access Denied: wrong key.\n";
+        }
+
+        // ---- OPTION 5: VIEW LOGS ----
+        else if (menuChoice == 5) {
+            string key = safeInput("Enter admin key: ");
+            if (key == "admin123") systemLog.printLog();
+            else cout << "Access Denied: wrong key.\n";
+        }
+
+        else if (menuChoice == 6) {
+            cout << "Goodbye!\n";
+        }
+        else {
+            cout << "Invalid choice. Enter 1-6.\n";
+        }
+
+    } while (menuChoice != 6);
 
     return 0;
 }
