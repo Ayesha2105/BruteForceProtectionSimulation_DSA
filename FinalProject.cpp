@@ -54,7 +54,8 @@ string generatePassword(int length = 12) {
     password += special[rand() % special.length()];
     for (int i = 4; i < length; i++)
         password += allChars[rand() % allChars.length()];
-    for (size_t i = password.length() - 1; i > 0; i--) {
+
+    for (size_t i = password.length() - 1; i > 0; i--) {  //remove pattern by shuffling
         int j = rand() % (i + 1);
         swap(password[i], password[j]);
     }
@@ -79,16 +80,14 @@ string safeInput(const string& prompt) {
     }
 }
 
-// ==================== CORE OOP DATA ENTITIES ====================
+// ----------------- CORE OOP DATA ENTITIES -----------------
 
 class UserProfile {
 private:
     string username;
     string passwordHash;
 public:
-    UserProfile(string u, string h)
-        : username(u), passwordHash(h) {}
-
+    UserProfile(string u, string h): username(u), passwordHash(h) {}
     string getUsername()     const { return username; }
     string getPasswordHash() const { return passwordHash; }
 };
@@ -98,64 +97,71 @@ private:
     string ipAddress;
     time_t blockTime;
 public:
-    IPTraffic(string ip, time_t releaseTime)
-        : ipAddress(ip), blockTime(releaseTime) {}
+    IPTraffic(string ip, time_t releaseTime): ipAddress(ip), blockTime(releaseTime) {}
     string getIpAddress() const { return ipAddress; }
     time_t getBlockTime() const { return blockTime; }
 };
 
-// ==================== IP ATTEMPT TRACKER ====================
-// Tracks per-IP failed attempts across all usernames (cross-username brute force)
+// -----------------------IP ATTEMPT TRACKER ------------------------
+// Tracks per-IP failed attempts across all usernames (linked list)node  creatted only when ip enter wrong pass
 
-class IPAttemptTracker {
-private:
-    struct IPAttemptNode {
+
+class IPAttemptNode {
+    public:
         string ip;
-        int    failCount;
+        int failCount;
         IPAttemptNode* next;
         IPAttemptNode(string i) : ip(i), failCount(1), next(nullptr) {}
     };
+class IPAttemptTracker {
+private:
     IPAttemptNode* head;
 public:
     IPAttemptTracker() : head(nullptr) {}
 
     int recordFailure(const string& ip) {
         for (IPAttemptNode* c = head; c; c = c->next)
-            if (c->ip == ip) return ++c->failCount;
+            if (c->ip == ip) 
+               return ++c->failCount;
         IPAttemptNode* n = new IPAttemptNode(ip);
-        n->next = head; head = n;
+        n->next = head; 
+        head = n;
         return 1;
     }
 
     int getFailCount(const string& ip) {
         for (IPAttemptNode* c = head; c; c = c->next)
-            if (c->ip == ip) return c->failCount;
+            if (c->ip == ip) 
+                return c->failCount;
         return 0;
     }
 
     void resetIP(const string& ip) {
         for (IPAttemptNode* c = head; c; c = c->next)
-            if (c->ip == ip) { c->failCount = 0; return; }
+            if (c->ip == ip) { 
+                c->failCount = 0; 
+            return; 
+        }
     }
 };
 
-// ==================== MANAGERS WITH SIMPLIFIED STRUCTS ====================
-
-// AuditLog: singly linked list, O(1) prepend, persisted to logs.txt
-class AuditLog {
-private:
-    struct LogNode {
+// ---------------------------------AuditLog: singly linked list,persisted to logs.txt
+class LogNode {
+    public:
         string  message;
         LogNode* next;
         LogNode(string msg) : message(msg), next(nullptr) {}
     };
+class AuditLog {
+private:
     LogNode* head;
 public:
     AuditLog() : head(nullptr) {}
 
-    void addEntry(const string& msg) {
+    void addEntry(const string& msg) { //insert at head  and write to file 
         LogNode* n = new LogNode(msg);
-        n->next = head; head = n;
+        n->next = head; 
+        head = n;
         ofstream fout("logs.txt", ios::app);
         if (fout.is_open()) fout << msg << endl;
     }
@@ -169,51 +175,75 @@ public:
     }
 };
 
-// UserDatabase: AVL tree
-class UserDatabase {
-private:
-    struct UserNode {
+// -----------------------------UserDatabase: AVL tree-------------------------
+class UserNode {
+    public:
         UserProfile* data;
-        int    height;
+        int height;
         UserNode* left;
         UserNode* right;
         UserNode(UserProfile* d) : data(d), height(1), left(nullptr), right(nullptr) {}
-    };
+};
+
+class UserDatabase {
+private:
     UserNode* root;
 
     int  getHeight (UserNode* n) { return n ? n->height : 0; }
     int  getBalance(UserNode* n) { return n ? getHeight(n->left) - getHeight(n->right) : 0; }
 
     UserNode* rotateRight(UserNode* y) {
-        UserNode* x = y->left; UserNode* T2 = x->right;
-        x->right = y; y->left = T2;
+        UserNode* x = y->left; 
+        UserNode* T2 = x->right;
+        x->right = y; 
+        y->left = T2;
         y->height = max(getHeight(y->left), getHeight(y->right)) + 1;
         x->height = max(getHeight(x->left), getHeight(x->right)) + 1;
         return x;
     }
     UserNode* rotateLeft(UserNode* x) {
-        UserNode* y = x->right; UserNode* T2 = y->left;
-        y->left = x; x->right = T2;
+        UserNode* y = x->right; 
+        UserNode* T2 = y->left;
+        y->left = x; 
+        x->right = T2;
         x->height = max(getHeight(x->left), getHeight(x->right)) + 1;
         y->height = max(getHeight(y->left), getHeight(y->right)) + 1;
         return y;
     }
 
+    //---insert user in avl and file---
     UserNode* insert(UserNode* node, UserProfile* p, bool& success) {
-        if (!node) { success = true; return new UserNode(p); }
-        if      (p->getUsername() < node->data->getUsername()) node->left  = insert(node->left,  p, success);
-        else if (p->getUsername() > node->data->getUsername()) node->right = insert(node->right, p, success);
-        else   { success = false; return node; }
+        if (!node) { 
+             success = true;
+             return new UserNode(p);
+            }
+        if(p->getUsername() < node->data->getUsername()) 
+            node->left  = insert(node->left,  p, success);
+        else if (p->getUsername() > node->data->getUsername()) 
+            node->right = insert(node->right, p, success);
+        else   { 
+            success = false; 
+            return node; 
+        }
 
         node->height = 1 + max(getHeight(node->left), getHeight(node->right));
         int bal = getBalance(node);
-        if (bal >  1 && p->getUsername() < node->left->data->getUsername())  return rotateRight(node);
-        if (bal < -1 && p->getUsername() > node->right->data->getUsername()) return rotateLeft(node);
-        if (bal >  1 && p->getUsername() > node->left->data->getUsername())  { node->left  = rotateLeft(node->left);  return rotateRight(node); }
-        if (bal < -1 && p->getUsername() < node->right->data->getUsername()) { node->right = rotateRight(node->right); return rotateLeft(node); }
+        if (bal >  1 && p->getUsername() < node->left->data->getUsername())  
+            return rotateRight(node);
+        if (bal < -1 && p->getUsername() > node->right->data->getUsername()) 
+            return rotateLeft(node);
+        if (bal >  1 && p->getUsername() > node->left->data->getUsername())  { 
+            node->left  = rotateLeft(node->left);  
+            return rotateRight(node);
+         }
+        if (bal < -1 && p->getUsername() < node->right->data->getUsername()) { 
+            node->right = rotateRight(node->right); 
+            return rotateLeft(node);
+         }
         return node;
     }
 
+    //--------------------searchinggg (Recursive Binary Search) --------------------------
     UserNode* search(UserNode* node, const string& u) {
         if (!node || node->data->getUsername() == u) return node;
         return (u < node->data->getUsername()) ? search(node->left, u) : search(node->right, u);
@@ -222,14 +252,13 @@ private:
     void displayAlphabetical(UserNode* node) {
         if (!node) return;
         displayAlphabetical(node->left);
-        cout << "User: " << node->data->getUsername()
-             << " | Hash: " << node->data->getPasswordHash() << "\n";
+        cout << "User: " << node->data->getUsername() << " | Hash: " << node->data->getPasswordHash() << "\n";
         displayAlphabetical(node->right);
     }
 
 public:
     UserDatabase() : root(nullptr) {}
-
+    //file handling in users.txt
     void saveUserToFile(const string& username, const string& hash) {
         ofstream fout("users.txt", ios::app);
         if (fout.is_open()) fout << username << " " << hash << "\n";
@@ -264,51 +293,74 @@ public:
     }
 };
 
-// IPFirewall: AVL tree for blocked IPs
-class IPFirewall {
-private:
-    struct IPNode {
+// -------------IPFirewall: AVL tree for only blocked IPs-------------
+
+ class IPNode {
+    public:
         IPTraffic* data;
-        int    height;
+        int height;
         IPNode* left;
         IPNode* right;
         IPNode(IPTraffic* d) : data(d), height(1), left(nullptr), right(nullptr) {}
     };
-    IPNode* root;
 
+class IPFirewall {
+private:
+    IPNode* root;
     int  getHeight (IPNode* n) { return n ? n->height : 0; }
     int  getBalance(IPNode* n) { return n ? getHeight(n->left) - getHeight(n->right) : 0; }
 
     IPNode* rotateRight(IPNode* y) {
-        IPNode* x = y->left; IPNode* T2 = x->right;
-        x->right = y; y->left = T2;
+        IPNode* x = y->left; 
+        IPNode* T2 = x->right;
+        x->right = y; 
+        y->left = T2;
         y->height = max(getHeight(y->left), getHeight(y->right)) + 1;
         x->height = max(getHeight(x->left), getHeight(x->right)) + 1;
         return x;
     }
     IPNode* rotateLeft(IPNode* x) {
-        IPNode* y = x->right; IPNode* T2 = y->left;
-        y->left = x; x->right = T2;
+        IPNode* y = x->right; 
+        IPNode* T2 = y->left;
+        y->left = x; 
+        x->right = T2;
         x->height = max(getHeight(x->left), getHeight(x->right)) + 1;
         y->height = max(getHeight(y->left), getHeight(y->right)) + 1;
         return y;
     }
 
     IPNode* insert(IPNode* node, IPTraffic* t, bool& success) {
-        if (!node) { success = true; return new IPNode(t); }
-        if      (t->getIpAddress() < node->data->getIpAddress()) node->left  = insert(node->left,  t, success);
-        else if (t->getIpAddress() > node->data->getIpAddress()) node->right = insert(node->right, t, success);
-        else   { success = false; return node; }
+        if (!node) { 
+            success = true; 
+            return new IPNode(t); 
+        }
+        if (t->getIpAddress() < node->data->getIpAddress()) 
+           node->left  = insert(node->left,  t, success);
+        else if (t->getIpAddress() > node->data->getIpAddress()) 
+           node->right = insert(node->right, t, success);
+        else   { 
+            success = false; 
+            return node;
+        }
 
         node->height = 1 + max(getHeight(node->left), getHeight(node->right));
         int bal = getBalance(node);
-        if (bal >  1 && t->getIpAddress() < node->left->data->getIpAddress())  return rotateRight(node);
-        if (bal < -1 && t->getIpAddress() > node->right->data->getIpAddress()) return rotateLeft(node);
-        if (bal >  1 && t->getIpAddress() > node->left->data->getIpAddress())  { node->left  = rotateLeft(node->left);  return rotateRight(node); }
-        if (bal < -1 && t->getIpAddress() < node->right->data->getIpAddress()) { node->right = rotateRight(node->right); return rotateLeft(node); }
+        if (bal >  1 && t->getIpAddress() < node->left->data->getIpAddress())  
+            return rotateRight(node);
+        if (bal < -1 && t->getIpAddress() > node->right->data->getIpAddress()) 
+            return rotateLeft(node);
+        if (bal >  1 && t->getIpAddress() > node->left->data->getIpAddress())  { 
+            node->left  = rotateLeft(node->left);  
+            return rotateRight(node); 
+        }
+        if (bal < -1 && t->getIpAddress() < node->right->data->getIpAddress()) { 
+            node->right = rotateRight(node->right); 
+            return rotateLeft(node); 
+        }
         return node;
     }
 
+    //------------- recursive binary ip search---------
     IPNode* search(IPNode* node, const string& ip) {
         if (!node || node->data->getIpAddress() == ip) return node;
         return (ip < node->data->getIpAddress()) ? search(node->left, ip) : search(node->right, ip);
@@ -316,6 +368,7 @@ private:
 
 public:
     IPFirewall() : root(nullptr) {}
+// save to blacklist .txt
 
     void saveBlockedIP(const string& ip, time_t banTime) {
         ofstream fout("blacklist.txt", ios::app);
@@ -341,6 +394,7 @@ public:
         return false;
     }
 
+    //------------------*****function to block ip for 30 min********--------------------
     void blockIP(const string& ip, AuditLog& logger) {
         bool s = false;
         time_t ban = time(nullptr) + (30 * 60);
@@ -351,14 +405,14 @@ public:
     }
 };
 
-// ==================== USERNAME BLOCK MANAGER ====================
+//------------------------ USERNAME BLOCK MANAGER (wrong attempts count ) (linked List)------------------------
 // Blocks a username if it receives too many failed attempts from any IP
 
 class UsernameBlockManager {
 private:
     struct BlockNode {
         string username;
-        int    failCount;
+        int failCount;
         time_t blockUntil;
         BlockNode* next;
         BlockNode(string u) : username(u), failCount(1), blockUntil(0), next(nullptr) {}
@@ -374,10 +428,9 @@ public:
         for (BlockNode* c = head; c; c = c->next) {
             if (c->username == username) {
                 c->failCount++;
-                logger.addEntry("Auth Failure: Attempt #" + to_string(c->failCount)
-                                + " for username -> " + username);
+                logger.addEntry("Auth Failure: Attempt #" + to_string(c->failCount)  + " for username -> " + username);
                 if (c->failCount >= USERNAME_BLOCK_THRESHOLD && c->blockUntil == 0) {
-                    c->blockUntil = time(nullptr) + (USERNAME_BLOCK_MINUTES * 60);
+                    c->blockUntil = time(nullptr) + (USERNAME_BLOCK_MINUTES * 60); //******blocked for 30 min usename ***** */
                     logger.addEntry("Security: Username blocked -> " + username);
                     return true;
                 }
@@ -385,7 +438,8 @@ public:
             }
         }
         BlockNode* n = new BlockNode(username);
-        n->next = head; head = n;
+        n->next = head;
+        head = n;
         logger.addEntry("Auth Failure: First failed attempt for username -> " + username);
         return false;
     }
@@ -394,8 +448,7 @@ public:
         for (BlockNode* c = head; c; c = c->next) {
             if (c->username == username) {
                 if (c->blockUntil != 0 && difftime(c->blockUntil, time(nullptr)) > 0) {
-                    cout << "Security Block: Username [" << username
-                         << "] is temporarily blocked (too many failed attempts).\n";
+                    cout << "Security Block: Username [" << username << "] is temporarily blocked (too many failed attempts).\n";
                     return true;
                 }
                 return false;
@@ -410,16 +463,15 @@ public:
     }
 };
 
-// ==================== MAIN ====================
+// ==================== *****MAIN******* ====================
 
 int main() {
     srand(time(nullptr));
-
     UserDatabase  appDb;
     IPFirewall webWaf;
     AuditLog systemLog;
-    IPAttemptTracker ipTracker;
-    UsernameBlockManager usernameBlocker;
+    IPAttemptTracker ipTracker;  //linked list object to track failed attempts of ip 
+    UsernameBlockManager usernameBlocker; //linked list object to track failed attempts of username
 
     appDb.loadUsersFromFile();
     webWaf.loadBlockedIPs();
@@ -438,19 +490,22 @@ int main() {
 
         string choiceStr;
         getline(cin, choiceStr);
-        if (choiceStr.empty()) continue;
-        try { menuChoice = stoi(choiceStr); }
-        catch (...) { cout << "Invalid choice. Enter a number 1-7.\n"; continue; }
+        if (choiceStr.empty()) 
+           continue;
+        try { 
+            menuChoice = stoi(choiceStr);
+        }catch (...) { 
+            cout << "Invalid choice. Enter a number 1-7.\n"; 
+            continue; 
+        }
 
         // ---- OPTION 1: REGISTER ----
         if (menuChoice == 1) {
             string userBuffer = safeInput("Enter Username: ");
-
             if (appDb.isDuplicate(userBuffer)) {
                 cout << "Error: Username already exists.\n";
                 continue;
             }
-
             string passBuffer;
             while (true) {
                 passBuffer = safeInput("Enter Password: ");
@@ -467,13 +522,15 @@ int main() {
                     systemLog.addEntry("Registration: Weak password rejected for -> " + userBuffer);
 
                     cout << "Want a suggested strong password? (y/n): ";
-                    string genChoice; getline(cin, genChoice);
+                    string genChoice;
+                    getline(cin, genChoice);
                     if (!genChoice.empty() && (genChoice[0] == 'y' || genChoice[0] == 'Y')) {
                         string suggested = generatePassword(12);
                         cout << "Suggested : " << suggested << "\n";
                         cout << "Strength  : " << checkStrength(suggested) << "\n";
                         cout << "Use this password? (y/n): ";
-                        string useIt; getline(cin, useIt);
+                        string useIt; 
+                        getline(cin, useIt);
                         if (!useIt.empty() && (useIt[0] == 'y' || useIt[0] == 'Y')) {
                             passBuffer = suggested;
                             break;
@@ -495,14 +552,12 @@ int main() {
         // ---- OPTION 2: LOGIN ----
         else if (menuChoice == 2) {
             string ipBuffer = safeInput("Enter your IP Address: ");
-
             if (webWaf.isBlacklisted(ipBuffer)) {
                 systemLog.addEntry("Login Denied: Blocked IP attempted access -> " + ipBuffer);
                 continue;
             }
 
             string userBuffer = safeInput("Enter Username: ");
-
             if (usernameBlocker.isBlocked(userBuffer)) {
                 systemLog.addEntry("Login Denied: Blocked username -> " + userBuffer);
                 continue;
